@@ -1,0 +1,16 @@
+# Data (too large for GitHub)
+data/
+*.csv
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Outputs (regenerate locally)
+outputs/
+*.npz
+
+# OS
+.DS_Store
