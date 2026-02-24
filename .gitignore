@@ -1,7 +1,7 @@
 # Data (too large for GitHub)
 data/
 *.csv
-
+.venv/
 # Python
 venv/
 __pycache__/

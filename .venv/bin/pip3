@@ -1,4 +1,4 @@
-#!/home/ibrahim/math619/.venv/bin/python3
+#!/home/ibrahim/pinn-wake-control/.venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys
