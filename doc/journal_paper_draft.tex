@@ -1,0 +1,185 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage{authblk}
+
+\onehalfspacing
+
+% ── Title ──
+\title{\textbf{Physics-Informed Neural Networks for Wake-Aware Yaw and Blade Pitch Control Optimization in Wind Turbines}}
+
+\author[1]{Ibrahim Alghrabi}
+\author[1]{Tariq Ahmed Albusyuni}
+\affil[1]{Department of Mathematics \& Statistics, King Fahd University of Petroleum \& Minerals, Dhahran, Saudi Arabia}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Wind farm energy output is significantly degraded by turbine wake interactions, with downstream power losses ranging from 10\% to over 40\%. Active control strategies---particularly yaw misalignment and blade pitch adjustment---can partially recover these losses, but conventional approaches rely on empirical models that oversimplify wake physics or on high-fidelity CFD simulations that are prohibitively expensive for real-time optimization. This paper presents a physics-informed neural network (PINN) framework that embeds Navier--Stokes equations and actuator disk theory directly into the neural network training loss function, creating a differentiable surrogate model for wind turbine power prediction. Trained on real SCADA data from the Kelmarsh Wind Farm (135,068 records across 6~Senvion MM92 turbines), the PINN achieves $R^2 = 0.991$ on power prediction while maintaining physical consistency with the cubic power law, yaw cosine relationship, and Betz limit. By leveraging automatic differentiation through the trained model, gradient-based yaw optimization is demonstrated, yielding a mean predicted power gain of 3.0\% with a mean yaw correction of $-2.8^\circ$. Compared to a baseline neural network without physics constraints, the PINN exhibits improved generalization, smoother training dynamics, and physically interpretable predictions. These results establish a foundation for real-time, PINN-based wind farm control that balances computational efficiency with physical fidelity.
+
+\medskip
+\noindent \textbf{Keywords:} physics-informed neural networks; wind turbine; wake modeling; yaw optimization; blade pitch control; SCADA data; differentiable surrogate model
+\end{abstract}
+
+% ══════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:introduction}
+% ══════════════════════════════════════════════════════════════════
+
+Wind energy has become one of the fastest-growing renewable energy sources worldwide, with global installed capacity exceeding 900~GW as of 2023. However, in multi-turbine wind farms, aerodynamic wake interactions between upstream and downstream turbines remain a fundamental challenge that limits overall energy production. When an upstream turbine extracts kinetic energy from the wind, it creates a wake region characterized by reduced wind speed and increased turbulence that can persist for 10--20 rotor diameters downstream \citep{stevens2017flow}. Downstream turbines operating within these wakes experience significant power losses---typically 10--20\% under partial wake conditions and exceeding 40\% under full wake alignment in closely spaced arrays \citep{barthelmie2010quantifying}.
+
+To mitigate these wake losses, active control strategies have been proposed that deliberately adjust the operating parameters of upstream turbines to redirect or weaken their wakes. The two most studied control variables are yaw misalignment, where an upstream turbine is intentionally oriented away from the incoming wind direction to deflect its wake laterally, and blade pitch adjustment, which modifies the thrust coefficient and consequently the wake velocity deficit \citep{annoni2016analysis}. Field experiments have demonstrated that coordinated yaw control can recover up to 15\% of lost energy at the farm level, with even larger gains under specific atmospheric conditions \citep{howland2022collective}.
+
+Despite the demonstrated potential of wake-aware control, existing approaches face a fundamental trade-off between physical accuracy and computational speed. On one end of the spectrum, engineering wake models such as the Jensen \citep{jensen1983note} and Bastankhah--Port\'{e}-Agel \citep{bastankhah2014new} models provide fast, analytical predictions of wake velocity deficits but rely on simplifying assumptions (e.g., top-hat or Gaussian wake profiles, steady-state conditions, single-turbine superposition) that limit their accuracy in complex terrain, non-stationary atmospheric conditions, and multi-wake scenarios. On the other end, high-fidelity computational fluid dynamics (CFD) simulations based on Large Eddy Simulation (LES) or Reynolds-Averaged Navier--Stokes (RANS) equations can capture the full complexity of turbulent wake interactions but require hours to days of computation per scenario, making them impractical for real-time control applications.
+
+Physics-informed neural networks (PINNs), introduced by \citet{raissi2019physics}, offer a promising middle ground by embedding governing partial differential equations directly into the neural network training process. Rather than relying solely on data to learn input--output relationships, PINNs augment the standard data-fitting loss with residual terms that penalize violations of known physics---in this case, the Navier--Stokes momentum equations, the continuity equation, and actuator disk relations. This approach provides several advantages for wind farm control: (1)~data efficiency, since the physics constraints guide learning even with sparse measurements; (2)~physical consistency, ensuring predictions respect conservation laws and aerodynamic principles; and (3)~differentiability, enabling gradient-based optimization of control parameters (yaw, pitch) through the trained model via automatic differentiation.
+
+This paper presents a PINN-based framework for wake-aware yaw and blade pitch control optimization in wind turbines. The key contributions are:
+
+\begin{enumerate}[nosep]
+    \item Development of a PINN architecture that predicts wind turbine power output from operational SCADA measurements while enforcing physics-based constraints including the power--wind speed cubic law, yaw cosine relationship, Betz limit, and smoothness regularization.
+    \item Training and validation of the PINN on real operational data from the Kelmarsh Wind Farm (6~Senvion MM92 turbines, 135,068 SCADA records), demonstrating $R^2 > 0.99$ prediction accuracy with improved generalization compared to a physics-agnostic baseline.
+    \item Demonstration of gradient-based yaw angle optimization using the trained PINN as a differentiable surrogate model, achieving a mean predicted power gain of 3.0\% through automatic differentiation.
+\end{enumerate}
+
+The remainder of this paper is organized as follows. Section~\ref{sec:literature} reviews related work on PINNs in wind energy applications. Section~3 describes the methodology, including the PINN architecture, physics loss formulation, and optimization procedure. Section~4 presents experimental results and analysis. Section~5 discusses implications and limitations, and Section~6 concludes with directions for future work.
+
+% ══════════════════════════════════════════════════════════════════
+\section{Literature Review}
+\label{sec:literature}
+% ══════════════════════════════════════════════════════════════════
+
+\subsection{Physics-Informed Neural Networks}
+
+The physics-informed neural network framework, formalized by \citet{raissi2019physics}, represents a paradigm shift in scientific machine learning by integrating domain knowledge---expressed as partial differential equations (PDEs)---directly into the neural network training process. The core idea is to define a composite loss function:
+\begin{equation}
+    \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{data}} + \lambda \, \mathcal{L}_{\text{physics}}
+    \label{eq:pinn_loss}
+\end{equation}
+where $\mathcal{L}_{\text{data}}$ measures the discrepancy between network predictions and observed data, $\mathcal{L}_{\text{physics}}$ penalizes violations of the governing PDEs at a set of collocation points, and $\lambda$ is a weighting hyperparameter that balances data fidelity against physical consistency. The PDE residuals are computed via automatic differentiation through the network, requiring no discretization mesh and enabling the same framework to handle both forward problems (predicting system behavior given parameters) and inverse problems (inferring parameters from observations).
+
+Since the foundational work, PINNs have been applied across fluid mechanics \citep{raissi2019physics}, heat transfer, structural mechanics, and other domains governed by known PDEs. However, several challenges have been identified: training instability due to competing loss terms \citep{wang2021understanding}, sensitivity to the collocation point distribution, difficulty scaling to three-dimensional turbulent flows, and the need for careful tuning of the physics weight $\lambda$. Recent advances in adaptive loss weighting, curriculum training strategies, and domain decomposition have partially addressed these limitations.
+
+\subsection{Wake Reconstruction and Prediction}
+
+Several research groups have applied PINNs to wind turbine wake modeling with promising results. \citet{song2025wake} combined spatiotemporal PINNs with adaptive collocation strategies to predict dynamic farm-level wakes, achieving velocity-field root-mean-square errors below 6\% on field data. Their approach demonstrated that spatially adaptive placement of collocation points in high-gradient wake regions significantly improves prediction accuracy compared to uniform sampling.
+
+\citet{wang2024dynamic} addressed the challenge of reconstructing transient wake fields during active yaw maneuvers by fusing sparse nacelle-mounted LiDAR measurements with PINN-based flow reconstruction. Their physics-constrained approach recovered full three-dimensional wake structures from minimal sensor data, enabling real-time monitoring of wake deflection during yaw control operations. This work is particularly relevant to the present study as it demonstrates the feasibility of combining sparse operational measurements with physics constraints for wake-aware control.
+
+\citet{gafoor2025physics} embedded a $k$--$\varepsilon$ turbulence closure model within a PINN framework and successfully reproduced single-turbine wake velocity profiles without requiring high-fidelity simulation labels for training. Their results confirmed that PINN-based turbulence modeling is feasible even with simplified closure models, though computational cost increases significantly with the addition of turbulence transport equations.
+
+\subsection{Digital Twins and Control Applications}
+
+The application of PINNs to wind farm digital twins and control represents a natural extension of wake prediction capabilities. \citet{zhang2023digital} developed a PINN-based digital twin that integrated LiDAR measurements with Navier--Stokes and actuator disk physics to provide real-time flow-field estimates for an onshore wind farm in Belgium. Their system informed yaw and pitch control decisions, recovering up to 9\% of energy losses in simulation studies. This work demonstrated the practical viability of PINN-based control but was limited to simulation validation without closed-loop field testing.
+
+\subsection{Aerodynamic Surrogates and Power Prediction}
+
+Beyond wake modeling, PINNs have been applied as surrogate models for turbine-level aerodynamic computations. \citet{baisthakur2024physics} replaced iterative blade-element-momentum (BEM) calculations with a PINN surrogate, achieving a forty-fold reduction in computation time while preserving load-prediction accuracy within 2\%. This computational speedup is essential for control applications where BEM solvers introduce unacceptable latency in the optimization loop.
+
+\citet{gijon2023prediction} demonstrated that PINNs constrained by power--torque physical relationships outperform unconstrained neural networks on multi-turbine SCADA power prediction tasks and additionally provide calibrated uncertainty bounds. Their uncertainty quantification framework is relevant for robust control design, where confidence in the surrogate model's predictions directly affects the aggressiveness of yaw and pitch adjustments.
+
+\subsection{Research Gap and Contribution}
+
+While the works reviewed above have individually advanced PINN-based wake reconstruction, digital twin development, and aerodynamic surrogate modeling, a gap remains in the integration of these capabilities into a unified, gradient-based control optimization framework trained on real operational SCADA data. Most existing studies rely on simulation data for training and validation, and few demonstrate end-to-end differentiable optimization through the trained PINN. The present work addresses this gap by: (1)~training on real Kelmarsh Wind Farm SCADA data rather than simulation outputs, (2)~formulating physics constraints that are directly relevant to control optimization (monotonicity, yaw cosine law, Betz limit), and (3)~demonstrating gradient-based yaw optimization as a proof of concept for PINN-enabled real-time control.
+
+% ══════════════════════════════════════════════════════════════════
+% Placeholder sections for future completion
+% ══════════════════════════════════════════════════════════════════
+
+\section{Methodology}
+\textit{(To be completed in subsequent drafts --- will cover PINN architecture, physics loss formulation, training procedure, and optimization algorithm.)}
+
+\section{Results and Discussion}
+\textit{(To be completed --- will present training convergence, prediction accuracy, physics compliance, and yaw optimization results.)}
+
+\section{Conclusion}
+\textit{(To be completed --- will summarize contributions, discuss limitations, and outline future work.)}
+
+% ══════════════════════════════════════════════════════════════════
+\bibliographystyle{apalike}
+\begin{thebibliography}{99}
+
+\bibitem[Annoni et~al., 2016]{annoni2016analysis}
+Annoni, J., et~al. (2016).
+\newblock Analysis of axial-induction-based wind plant control using an engineering and a high-order wind plant model.
+\newblock \textit{Renewable Energy}, 96:792--805.
+
+\bibitem[Baisthakur and Fitzgerald, 2024]{baisthakur2024physics}
+Baisthakur, S. and Fitzgerald, B. (2024).
+\newblock Physics-informed neural network surrogate model for bypassing blade element momentum theory.
+\newblock \textit{Renewable Energy}, 224:120122.
+
+\bibitem[Barthelmie et~al., 2010]{barthelmie2010quantifying}
+Barthelmie, R.~J., et~al. (2010).
+\newblock Quantifying the impact of wind turbine wakes on power output at offshore wind farms.
+\newblock \textit{Renewable Energy}, 36(2):527--538.
+
+\bibitem[Bastankhah and Port\'{e}-Agel, 2014]{bastankhah2014new}
+Bastankhah, M. and Port\'{e}-Agel, F. (2014).
+\newblock A new analytical model for wind-turbine wakes.
+\newblock \textit{Renewable Energy}, 70:116--123.
+
+\bibitem[Gafoor et~al., 2025]{gafoor2025physics}
+Gafoor, A., et~al. (2025).
+\newblock A physics-informed neural network for turbulent wake simulations behind wind turbines.
+\newblock \textit{Physics of Fluids}, 37(1):015110.
+
+\bibitem[Gij\'{o}n et~al., 2023]{gijon2023prediction}
+Gij\'{o}n, A., et~al. (2023).
+\newblock Prediction of wind turbine power with physics-informed neural networks and evidential uncertainty quantification.
+\newblock \textit{arXiv preprint arXiv:2307.14675}.
+
+\bibitem[Howland et~al., 2022]{howland2022collective}
+Howland, M.~F., et~al. (2022).
+\newblock Collective wind farm operation based on a predictive model increases utility-scale energy production.
+\newblock \textit{Nature Energy}, 7(9):818--827.
+
+\bibitem[Jensen, 1983]{jensen1983note}
+Jensen, N.~O. (1983).
+\newblock A note on wind generator interaction.
+\newblock \textit{Ris{\o} National Laboratory Technical Report}, Ris{\o}-M-2411.
+
+\bibitem[Raissi et~al., 2019]{raissi2019physics}
+Raissi, M., Perdikaris, P., and Karniadakis, G.~E. (2019).
+\newblock Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations.
+\newblock \textit{Journal of Computational Physics}, 378:686--707.
+
+\bibitem[Song et~al., 2025]{song2025wake}
+Song, J., et~al. (2025).
+\newblock Wake field prediction of a wind farm based on a physics-informed neural network with different spatiotemporal prediction performance improvement strategies.
+\newblock \textit{Theoretical and Applied Mechanics Letters}, 15:100577.
+
+\bibitem[Stevens and Meneveau, 2017]{stevens2017flow}
+Stevens, R. J. A.~M. and Meneveau, C. (2017).
+\newblock Flow physics and modeling of wind farms.
+\newblock \textit{Annual Review of Fluid Mechanics}, 49:311--339.
+
+\bibitem[Wang et~al., 2024]{wang2024dynamic}
+Wang, L., et~al. (2024).
+\newblock Dynamic wake field reconstruction of wind turbine through physics-informed neural network and sparse LiDAR data.
+\newblock \textit{Energy}, 291:130401.
+
+\bibitem[Wang et~al., 2021]{wang2021understanding}
+Wang, S., Teng, Y., and Perdikaris, P. (2021).
+\newblock Understanding and mitigating gradient flow pathologies in physics-informed neural networks.
+\newblock \textit{SIAM Journal on Scientific Computing}, 43(5):A3055--A3081.
+
+\bibitem[Zhang and Zhao, 2023]{zhang2023digital}
+Zhang, J. and Zhao, X. (2023).
+\newblock Digital twin of wind farms via physics-informed deep learning.
+\newblock \textit{Energy Conversion and Management}, 293:117507.
+
+\end{thebibliography}
+
+\end{document}

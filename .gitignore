@@ -2,6 +2,7 @@
 data/
 *.csv
 .venv/
+.idea/
 # Python
 venv/
 __pycache__/
